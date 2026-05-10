@@ -2,6 +2,8 @@ import {
   ExpandLessRounded,
   ExpandMoreRounded,
   InboxRounded,
+  PushPin,
+  PushPinOutlined,
 } from '@mui/icons-material'
 import {
   alpha,
@@ -12,6 +14,7 @@ import {
   styled,
   Chip,
   Tooltip,
+  IconButton,
 } from '@mui/material'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -30,6 +33,7 @@ interface RenderProps {
   item: IRenderItem
   indent: boolean
   isChainMode?: boolean
+  isPinned?: boolean
   onLocation: (group: IRenderItem['group']) => void
   onCheckAll: (groupName: string) => void
   onHeadState: (groupName: string, patch: Partial<HeadState>) => void
@@ -37,6 +41,7 @@ interface RenderProps {
     group: IRenderItem['group'],
     proxy: IRenderItem['proxy'] & { name: string },
   ) => void
+  onTogglePin?: (groupName: string) => void
 }
 
 export const ProxyRender = (props: RenderProps) => {
@@ -49,6 +54,8 @@ export const ProxyRender = (props: RenderProps) => {
     onHeadState,
     onChangeProxy,
     isChainMode: _ = false,
+    isPinned = false,
+    onTogglePin,
   } = props
   const { type, group, headState, proxy, proxyCol } = item
   const { verge } = useVerge()
@@ -145,6 +152,29 @@ export const ProxyRender = (props: RenderProps) => {
           }}
         />
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {/* 钉住按钮: 钉住的 group 会显示在顶部 PinnedBar 里, 可一键跳转 */}
+          {onTogglePin && (
+            <Tooltip
+              title={isPinned ? '取消钉住' : '钉到顶部'}
+              arrow
+              placement="top"
+            >
+              <IconButton
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTogglePin(group.name)
+                }}
+                sx={{ mr: 0.5, p: 0.5 }}
+              >
+                {isPinned ? (
+                  <PushPin sx={{ fontSize: 16, color: 'primary.main' }} />
+                ) : (
+                  <PushPinOutlined sx={{ fontSize: 16 }} />
+                )}
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title={t('proxies.page.labels.proxyCount')} arrow>
             <Chip
               size="small"

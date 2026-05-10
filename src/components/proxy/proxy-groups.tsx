@@ -1,6 +1,7 @@
 import { ExpandMoreRounded } from '@mui/icons-material'
 import {
   Alert,
+  alpha,
   Box,
   Chip,
   IconButton,
@@ -157,11 +158,72 @@ export const ProxyGroups = (props: Props) => {
   const showScrollTopRef = useRef(false)
   const [showScrollTop, setShowScrollTop] = useState(false)
 
+  // ---- 钉住的 group 列表 (持久化到 localStorage) ----
+  const PINNED_KEY = 'proxy-pinned-groups'
+  const [pinnedNames, setPinnedNames] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(PINNED_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []
+    } catch {
+      return []
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(PINNED_KEY, JSON.stringify(pinnedNames))
+    } catch {}
+  }, [pinnedNames])
+  const togglePin = useCallback((groupName: string) => {
+    setPinnedNames((prev) =>
+      prev.includes(groupName)
+        ? prev.filter((n) => n !== groupName)
+        : [...prev, groupName],
+    )
+  }, [])
+  const pinnedSet = useMemo(() => new Set(pinnedNames), [pinnedNames])
+
+  // 平滑跳转到指定 group (用 data-group 属性定位)
+  // 如果 group 没展开会先自动展开, 然后等 DOM 更新后再滚动到位
+  const jumpToGroup = useStableCallback((groupName: string) => {
+    const head = getGroupHeadState(groupName)
+    const wasClosed = !head?.open
+
+    // 如果当前是收起状态, 先触发展开
+    if (wasClosed) {
+      onHeadState(groupName, { open: true })
+    }
+
+    // scrollTo 实际操作:
+    // - 如果原本就展开, 直接同步滚
+    // - 如果刚展开, 用 requestAnimationFrame 等下一帧让 DOM reflow,
+    //   再读 offsetTop (这时是展开后的最新位置) 再滚
+    const doScroll = () => {
+      const root = parentRef.current
+      if (!root) return
+      const safe = groupName.replace(/"/g, '\\"')
+      const target = root.querySelector<HTMLElement>(`[data-group="${safe}"]`)
+      if (!target) return
+      // scrollTo (而非 scrollIntoView) —— 后者会让所有祖先 scroll 一起滚
+      const targetTop = target.offsetTop - root.offsetTop
+      root.scrollTo({ top: targetTop, behavior: 'smooth' })
+    }
+
+    if (wasClosed) {
+      // 双 rAF: 第一帧 commit state, 第二帧 layout 完成
+      requestAnimationFrame(() => requestAnimationFrame(doScroll))
+    } else {
+      doScroll()
+    }
+  })
+
   const virtualizer = useVirtualizer({
     count: renderList.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 56,
-    overscan: 15,
+    // estimateSize 必须跟 ProxyItemMini.height (60) 一致
+    // 否则 measureElement 测出真实高度后会修正 transform 让列表"跳一下"
+    estimateSize: () => 60,
+    overscan: 30, // 加大 overscan，新 item 进入视口前已测量好，避免可见区域跳
     getItemKey: (index) => renderList[index]?.key ?? index,
   })
   const virtualItems = virtualizer.getVirtualItems()
@@ -176,9 +238,10 @@ export const ProxyGroups = (props: Props) => {
   )
 
   // 从 localStorage 恢复滚动位置
+  // 关键: deps 只能依赖 mode (规则/全局/直连切换时恢复)
+  // 不能依赖 renderList.length —— 否则点 chevron 展开/收起组改变节点数时,
+  // 会重跑 effect 把 scrollTop 强制跳回旧位置,造成"乱动"
   useEffect(() => {
-    if (renderList.length === 0) return
-
     let restoreTimer: ReturnType<typeof setTimeout> | null = null
 
     try {
@@ -208,7 +271,7 @@ export const ProxyGroups = (props: Props) => {
         clearTimeout(restoreTimer)
       }
     }
-  }, [mode, renderList.length])
+  }, [mode])
 
   // 改为使用节流函数保存滚动位置
   const saveScrollPosition = useCallback(
@@ -423,6 +486,23 @@ export const ProxyGroups = (props: Props) => {
 
   // ProxyGroupNavigator 已删除，handleGroupLocationByName + proxyGroupNames 一并清理
 
+  // 当前 renderList 中有效存在的 group name (用于过滤已删除的 pinned)
+  const allGroupNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const item of renderList) {
+      if (item.type === 0 && item.group?.name) {
+        names.add(item.group.name)
+      }
+    }
+    return names
+  }, [renderList])
+
+  // 过滤 pinned: 只保留当前 renderList 里实际存在的 group
+  const validPinned = useMemo(
+    () => pinnedNames.filter((n) => allGroupNames.has(n)),
+    [pinnedNames, allGroupNames],
+  )
+
   const renderProxyList = (height: string) => (
     <ProxyVirtualList
       parentRef={parentRef}
@@ -430,7 +510,7 @@ export const ProxyGroups = (props: Props) => {
       totalSize={virtualizer.getTotalSize()}
       virtualItems={virtualItems}
       renderList={renderList}
-      stickyItem={stickyGroupItem}
+      stickyItem={null}
       indent={mode === 'rule' || mode === 'script'}
       isChainMode={isChainMode}
       measureElement={virtualizer.measureElement}
@@ -438,8 +518,54 @@ export const ProxyGroups = (props: Props) => {
       onCheckAll={handleCheckAll}
       onHeadState={onHeadState}
       onChangeProxy={handleChangeProxy}
+      pinnedSet={pinnedSet}
+      onTogglePin={togglePin}
     />
   )
+
+  // 顶部钉住条
+  const renderPinnedBar = () => {
+    if (validPinned.length === 0) return null
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 0.75,
+          px: 1.5,
+          py: 1,
+          borderBottom: '1px solid',
+          borderColor: 'var(--md-sys-color-outline-variant)',
+          backgroundColor: 'var(--md-sys-color-surface-container-low)',
+        }}
+      >
+        {validPinned.map((name) => (
+          <Chip
+            key={name}
+            label={name}
+            size="small"
+            onClick={() => jumpToGroup(name)}
+            onDelete={() => togglePin(name)}
+            sx={{
+              borderRadius: '999px',
+              fontWeight: 500,
+              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.12),
+              color: 'primary.main',
+              '&:hover': {
+                backgroundColor: (theme) =>
+                  alpha(theme.palette.primary.main, 0.2),
+              },
+              '& .MuiChip-deleteIcon': {
+                color: 'primary.main',
+                opacity: 0.6,
+                '&:hover': { opacity: 1, color: 'primary.main' },
+              },
+            }}
+          />
+        ))}
+      </Box>
+    )
+  }
 
   if (mode === 'direct') {
     return <BaseEmpty textKey="proxies.page.messages.directMode" />
@@ -453,7 +579,15 @@ export const ProxyGroups = (props: Props) => {
     return (
       <>
         <Box sx={{ display: 'flex', height: '100%', gap: 2 }}>
-          <Box sx={{ flex: 1, position: 'relative' }}>
+          <Box
+            sx={{
+              flex: 1,
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}
+          >
             {showRuleHeader && (
               <ChainRuleHeader
                 title={t('proxies.page.rules.title')}
@@ -464,9 +598,11 @@ export const ProxyGroups = (props: Props) => {
               />
             )}
 
-            {renderProxyList(
-              showRuleHeader ? 'calc(100% - 80px)' : 'calc(100% - 14px)',
-            )}
+            {renderPinnedBar()}
+
+            <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
+              {renderProxyList('100%')}
+            </Box>
             <ScrollTopButton show={showScrollTop} onClick={scrollToTop} />
           </Box>
 
@@ -511,10 +647,20 @@ export const ProxyGroups = (props: Props) => {
 
   return (
     <div
-      style={{ position: 'relative', height: '100%', willChange: 'transform' }}
+      style={{
+        position: 'relative',
+        height: '100%',
+        willChange: 'transform',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
     >
-      {/* 用户要求删掉右侧快速跳转 ProxyGroupNavigator */}
-      {renderProxyList('calc(100% - 14px)')}
+      {/* 顶部钉住的 group chips */}
+      {renderPinnedBar()}
+      {/* 列表区 (flex:1 自动填满剩余高度) */}
+      <Box sx={{ flex: 1, position: 'relative', minHeight: 0 }}>
+        {renderProxyList('100%')}
+      </Box>
       <ScrollTopButton show={showScrollTop} onClick={scrollToTop} />
     </div>
   )
@@ -544,6 +690,8 @@ interface ProxyVirtualListProps {
     group: IRenderItem['group'],
     proxy: IRenderItem['proxy'] & { name: string },
   ) => void
+  pinnedSet?: Set<string>
+  onTogglePin?: (groupName: string) => void
 }
 
 interface ProxyGroupOption {
@@ -705,7 +853,13 @@ function ProxyVirtualList({
   onCheckAll,
   onHeadState,
   onChangeProxy,
+  pinnedSet,
+  onTogglePin,
 }: ProxyVirtualListProps) {
+  // unused params (kept for future virtualization re-enable)
+  void totalSize
+  void virtualItems
+  void measureElement
   return (
     <div ref={parentRef} style={{ height, overflow: 'auto' }}>
       {stickyItem && (
@@ -739,31 +893,34 @@ function ProxyVirtualList({
         </Box>
       )}
 
-      <div style={{ height: totalSize, position: 'relative' }}>
-        {virtualItems.map((virtualItem) => (
-          <div
-            key={virtualItem.key}
-            data-index={virtualItem.index}
-            ref={measureElement}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualItem.start}px)`,
-            }}
-          >
+      {/* 关掉虚拟化 —— 改用普通 DOM flow 渲染全部 items
+          这样点 chevron 折叠/展开时，下方内容靠浏览器自然 reflow 挤下去
+          不再有 transform 跳变，但代价是节点 >500 时滚动可能略卡 */}
+      <div style={{ position: 'relative' }}>
+        {renderList.map((item, index) => {
+          // 只在 group 头 (type 0) 上加 data-group, 用于 jumpToGroup 定位
+          const groupName = item.type === 0 ? item.group?.name : undefined
+          const isPinned = !!(groupName && pinnedSet?.has(groupName))
+          return (
+            <div
+              key={item.key ?? index}
+              data-index={index}
+              {...(groupName ? { 'data-group': groupName } : {})}
+            >
             <ProxyRender
-              item={renderList[virtualItem.index]}
+              item={item}
               indent={indent}
               onLocation={onLocation}
               onCheckAll={onCheckAll}
               onHeadState={onHeadState}
               onChangeProxy={onChangeProxy}
               isChainMode={isChainMode}
+              isPinned={isPinned}
+              onTogglePin={onTogglePin}
             />
-          </div>
-        ))}
+            </div>
+          )
+        })}
         <div style={{ height: 8 }} />
       </div>
     </div>
