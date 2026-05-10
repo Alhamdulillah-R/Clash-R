@@ -1,0 +1,87 @@
+@use './layout.scss';
+@use './page.scss';
+@use './font.scss';
+
+body {
+  margin: 0;
+  // 与 MUI typography 字体栈保持一致，避免首屏闪烁
+  font-family:
+    'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei UI', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+:root {
+  // MD3 主色（默认 Material You purple，运行时被 MUI theme 覆盖）
+  --primary-main: #6750a4;
+  --text-primary: #1c1b1f;
+  --selection-color: #ffffff;
+  --scroller-color: #b5b5b5;
+  --background-color: #fef7ff;
+  --background-color-alpha: rgba(103, 80, 164, 0.1);
+  // MD3 medium shape token
+  --border-radius: 12px;
+}
+
+::selection {
+  color: var(--selection-color);
+  background-color: var(--primary-main);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  border-radius: 6px;
+  background-color: var(--scroller-color);
+}
+*::-webkit-scrollbar-corner {
+  background-color: transparent;
+}
+
+body {
+  overflow: hidden;
+}
+
+// @media (prefers-color-scheme: dark) {
+//   :root {
+//     background-color: rgba(18, 18, 18, 1);
+//   }
+// }
+
+.user-none {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+// 卡片入场动画（参考 rex-mirror-realm 的 rex-float-in）
+// 用法: animation: card-float-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+@keyframes card-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+// 旋转动画 (代替组件内部 keyframes 重复定义)
+@keyframes spin-360 {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
